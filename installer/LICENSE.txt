@@ -1,0 +1,39 @@
+Stealth Co-Pilot - License Agreement
+
+Copyright (c) 2026 Siddharth Deshmukh. All rights reserved.
+
+1. Grant of licence
+   This software is licensed, not sold. You may install and use Stealth Co-Pilot
+   on the Windows computers that you personally use, for your own interview
+   preparation and live assistance.
+
+2. Your account
+   The app signs in with your Google account. You are responsible for keeping
+   that account secure and for everything done through it. One account works on
+   the web app and on the desktop app.
+
+3. Your content
+   Your resume, job descriptions, transcripts and interview history belong to
+   you. They are stored on your own computer (and, for a live room, on the
+   backend you are connected to) and are not sold or shared by this software.
+
+4. Local speech model
+   Transcription runs on your machine with a local model. No audio is uploaded
+   for transcription.
+
+5. No warranty
+   The software is provided "as is", without warranty of any kind. It is an
+   assistant, not a guarantee of any interview outcome, and you remain
+   responsible for what you say and do in an interview.
+
+6. Updates
+   The app checks for new versions and installs them in place. You can stop
+   using the software at any time by uninstalling it; your interview history and
+   settings stay in your user folder unless you delete them.
+
+7. Restrictions
+   Do not redistribute, resell, or sublicense this software, and do not remove
+   the copyright notices. Reverse engineering is permitted only where the law
+   requires it.
+
+By continuing you accept these terms.

@@ -67,6 +67,22 @@ jobs:
           Copy-Item "dist/StealthInterviewCoPilot.exe" "dist/StealthInterviewCoPilot-$tag.exe"
           Get-ChildItem "dist/*.exe" | Select-Object Name, Length
 
+      # The website hands out this wizard, so a fresh install asks for the licence,
+      # install folder, Start Menu group and shortcut options - and registers an
+      # uninstaller. The portable EXE above stays in the release for the updater.
+      - name: Build the Windows installer
+        shell: pwsh
+        run: |
+          $tag = "${{ inputs.tag || github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          choco install innosetup --no-progress -y | Out-Null
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found at $iscc" }
+          & $iscc "installer\StealthCoPilot.iss" /DAppVersion=$version
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          Copy-Item "dist\StealthInterviewCoPilot-Setup-v$version.exe" "dist\StealthInterviewCoPilot-Setup.exe"
+          Get-ChildItem "dist/*.exe" | Select-Object Name, Length
+
       # Only the changed bytes: the app patches itself instead of re-downloading 108 MB.
       - name: Build the delta patch
         env:
@@ -82,6 +98,8 @@ jobs:
           files: |
             dist/StealthInterviewCoPilot.exe
             dist/StealthInterviewCoPilot-v*.exe
+            dist/StealthInterviewCoPilot-Setup.exe
+            dist/StealthInterviewCoPilot-Setup-v*.exe
             dist/*.bsdiff
           generate_release_notes: true
           fail_on_unmatched_files: false
