@@ -6,3 +6,4 @@ dist/
 *.spec
 preview/
 dev-*.log
+src/firebase_key.py

@@ -24,6 +24,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The Firebase web key is public client config, but it stays out of the repo:
+      # it is baked into a git-ignored module from the FIREBASE_API_KEY secret.
+      - name: Bake the Firebase key
+        shell: bash
+        env:
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+        run: |
+          if [ -z "$FIREBASE_API_KEY" ]; then
+            echo "::warning::FIREBASE_API_KEY secret is missing; this build will have no Google sign-in."
+            exit 0
+          fi
+          python -c "import os, pathlib; pathlib.Path('src/firebase_key.py').write_text('FIREBASE_API_KEY = ' + repr(os.environ['FIREBASE_API_KEY']) + chr(10), encoding='utf-8'); print('sign-in key baked into the build')"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

@@ -24,9 +24,27 @@ import requests
 
 from paths import app_data_dir
 
-FIREBASE_API_KEY = os.environ.get(
-    "COPILOT_FIREBASE_API_KEY", "AIzaSyDVWKY0h8eFXuNWnAssorpenLX2UgeQnPM"
-)
+
+
+def _firebase_api_key() -> str:
+    """Firebase web API key: public client config, but never kept in the repo.
+
+    The release workflow writes ``src/firebase_key.py`` (git-ignored) from the
+    ``FIREBASE_API_KEY`` repository secret; a source checkout can export
+    ``COPILOT_FIREBASE_API_KEY`` instead. Without either, sign-in reports that it
+    is not configured instead of shipping a key in the source tree.
+    """
+    key = os.environ.get("COPILOT_FIREBASE_API_KEY", "").strip()
+    if key:
+        return key
+    try:
+        from firebase_key import FIREBASE_API_KEY as baked  # type: ignore[import-not-found]
+    except ImportError:
+        return ""
+    return str(baked or "").strip()
+
+
+FIREBASE_API_KEY = _firebase_api_key()
 _REFRESH = "https://securetoken.googleapis.com/v1/token"
 _TIMEOUT = 20
 
