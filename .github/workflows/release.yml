@@ -38,7 +38,7 @@ jobs:
           --add-data "assets/stealth_copilot.png;assets"
           --collect-all pyaudiowpatch --collect-all pystray --collect-all faster_whisper
           --collect-all ctranslate2 --collect-all tokenizers --collect-all huggingface_hub
-          --collect-all av --exclude-module IPython --exclude-module matplotlib
+          --collect-all av --collect-all bsdiff4 --exclude-module IPython --exclude-module matplotlib
           --exclude-module pytest --exclude-module nbformat --exclude-module zmq
           --exclude-module pandas --exclude-module scipy --exclude-module tensorflow
           src/main.py
@@ -46,11 +46,20 @@ jobs:
       - name: Check the build
         run: python -c "import os,sys; p='dist/StealthInterviewCoPilot.exe'; print(p, os.path.getsize(p)//1048576, 'MB'); sys.exit(0 if os.path.exists(p) else 1)"
 
+      # Only the changed bytes: the app patches itself instead of re-downloading 108 MB.
+      - name: Build the delta patch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: python scripts/make_patch.py
+
       - name: Publish the release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           name: Stealth Co-Pilot ${{ inputs.tag || github.ref_name }}
-          files: dist/StealthInterviewCoPilot.exe
+          files: |
+            dist/StealthInterviewCoPilot.exe
+            dist/*.bsdiff
           generate_release_notes: true
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false

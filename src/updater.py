@@ -1,10 +1,13 @@
 """In-app updates for the packaged Windows build.
 
-The desktop repo publishes a GitHub release for every ``vX.Y.Z`` tag: the
-workflow on GitHub attaches ``StealthInterviewCoPilot.exe`` to it. This module
-asks GitHub for ``releases/latest``, compares the tag with :data:`version.APP_VERSION`
-and can download the asset and swap the running EXE (renaming a running EXE is
-allowed on Windows, so a tiny batch script finishes the job after we exit).
+Every ``vX.Y.Z`` tag produces a GitHub release from the desktop repo. Alongside
+the full ``StealthInterviewCoPilot.exe`` the workflow also publishes a bsdiff
+patch that turns the previous build into the new one - a one-file EXE is ~108 MB
+but a real code change usually patches in under a megabyte.
+
+The updater downloads the patch when it exists (falling back to the full EXE),
+rebuilds the new binary locally, verifies its size and hands the swap to a small
+batch script that waits for the app to exit, replaces the EXE and starts it.
 """
 from __future__ import annotations
 
@@ -12,10 +15,11 @@ import logging
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+import bsdiff4
 import requests
 
 from version import APP_VERSION, GITHUB_REPO
@@ -24,7 +28,13 @@ log = logging.getLogger(__name__)
 
 RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 ASSET_NAME = "StealthInterviewCoPilot.exe"
-TIMEOUT = 12
+PATCH_TEMPLATE = "StealthInterviewCoPilot-v{old}-to-v{new}.bsdiff"
+TIMEOUT = 20
+CHUNK = 1 << 18
+
+# (bytes downloaded, total bytes when the server tells us, else 0)
+Progress = Callable[[int, int], None]
+Status = Callable[[str], None]
 
 
 @dataclass
@@ -35,6 +45,13 @@ class Update:
     notes: str
     url: str
     size: int
+    patch_url: str = ""
+    patch_size: int = 0
+    extra: dict = field(default_factory=dict)
+
+    @property
+    def has_patch(self) -> bool:
+        return bool(self.patch_url)
 
 
 def version_key(value: str) -> tuple[int, ...]:
@@ -70,39 +87,85 @@ def check() -> Update | None:
     tag = str(data.get("tag_name") or "")
     if not tag or not is_newer(tag):
         return None
-    for asset in data.get("assets") or []:
-        if str(asset.get("name") or "").lower() == ASSET_NAME.lower():
-            return Update(
-                version=tag.lstrip("vV"),
-                notes=str(data.get("body") or "").strip(),
-                url=str(asset.get("browser_download_url") or ""),
-                size=int(asset.get("size") or 0),
-            )
-    log.info("Release %s has no %s asset", tag, ASSET_NAME)
-    return None
+    new_version = tag.lstrip("vV")
+    assets = data.get("assets") or []
+    full = next((item for item in assets
+                 if str(item.get("name") or "").lower() == ASSET_NAME.lower()), None)
+    if full is None:
+        log.info("Release %s has no %s asset", tag, ASSET_NAME)
+        return None
+    patch_name = PATCH_TEMPLATE.format(old=APP_VERSION, new=new_version).lower()
+    patch = next((item for item in assets
+                  if str(item.get("name") or "").lower() == patch_name), None)
+    update = Update(
+        version=new_version,
+        notes=str(data.get("body") or "").strip(),
+        url=str(full.get("browser_download_url") or ""),
+        size=int(full.get("size") or 0),
+        patch_url=str((patch or {}).get("browser_download_url") or ""),
+        patch_size=int((patch or {}).get("size") or 0),
+    )
+    log.info("Update %s found (delta %s)", new_version,
+             f"{update.patch_size / 1048576:.2f} MB" if update.has_patch else "unavailable")
+    return update
 
 
-def download(update: Update, progress: Callable[[float], None] | None = None) -> Path:
-    """Fetch the release EXE into the temp folder and return its path."""
-    target = Path(tempfile.gettempdir()) / f"StealthInterviewCoPilot-{update.version}.exe"
-    with requests.get(update.url, stream=True, timeout=120) as response:
+def _stream(url: str, target: Path, expected: int, progress: Progress | None) -> int:
+    """Download ``url`` into ``target``, reporting byte counts as they arrive."""
+    with requests.get(url, stream=True, timeout=180) as response:
         response.raise_for_status()
-        total = int(response.headers.get("Content-Length") or update.size or 0)
+        total = int(response.headers.get("Content-Length") or expected or 0)
         done = 0
+        if progress is not None:
+            progress(0, total)
         with target.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=1 << 20):
+            for chunk in response.iter_content(chunk_size=CHUNK):
                 if not chunk:
                     continue
                 handle.write(chunk)
                 done += len(chunk)
-                if progress is not None and total:
-                    progress(min(1.0, done / total))
+                if progress is not None:
+                    progress(done, total)
+    return done
+
+
+def download(update: Update, progress: Progress | None = None) -> Path:
+    """Fetch the whole release EXE into the temp folder."""
+    target = Path(tempfile.gettempdir()) / f"StealthInterviewCoPilot-{update.version}.exe"
+    _stream(update.url, target, update.size, progress)
     return target
 
 
 def is_frozen() -> bool:
-    """True inside the PyInstaller build; a source checkout cannot swap itself."""
+    """True inside the PyInstaller build; a source checkout cannot patch itself."""
     return bool(getattr(sys, "frozen", False))
+
+
+def build_update(update: Update, progress: Progress | None = None,
+                 status: Status | None = None) -> Path:
+    """Download the delta patch (or the full EXE) and return the new binary."""
+    if update.has_patch and is_frozen():
+        if status is not None:
+            status(f"Downloading the {update.patch_size / 1048576:.1f} MB update")
+        patch_file = Path(tempfile.gettempdir()) / f"copilot-{update.version}.bsdiff"
+        _stream(update.patch_url, patch_file, update.patch_size, progress)
+        if status is not None:
+            status("Applying the update")
+        target = Path(tempfile.gettempdir()) / f"StealthInterviewCoPilot-{update.version}.exe"
+        current = Path(sys.executable).resolve().read_bytes()
+        rebuilt = bsdiff4.patch(current, patch_file.read_bytes())
+        target.write_bytes(rebuilt)
+        patch_file.unlink(missing_ok=True)
+        log.info("Applied delta patch for v%s (%s bytes)", update.version, len(rebuilt))
+    else:
+        if status is not None:
+            status(f"Downloading v{update.version}")
+        target = download(update, progress)
+
+    if update.size and target.stat().st_size != update.size:
+        target.unlink(missing_ok=True)
+        raise RuntimeError("the downloaded update has an unexpected size")
+    return target
 
 
 def apply_and_restart(new_file: Path) -> bool:

@@ -35,7 +35,7 @@ from local_stt import LocalTranscriber, local_stt_enabled
 from paths import resource_path
 from paths import app_data_dir
 from tray_icon import TrayController
-from updater import Update, apply_and_restart, check as check_for_update, download as download_update
+from updater import Update, apply_and_restart, build_update, check as check_for_update
 from version import APP_VERSION
 from ws_client import AudioWebSocketClient
 from ui_kit import (Button, Card, Entry, LoadingOverlay, Meter, NavItem, Pill, Progress,
@@ -216,6 +216,10 @@ class InterviewSetup:
         # In-app updates: the release the GitHub workflow publishes for this repo.
         self.update: Update | None = None
         self.update_busy = False
+        self.update_window: tk.Toplevel | None = None
+        self.update_bar: Progress | None = None
+        self.update_detail = None
+        self.update_count = None
         self.navbar_right: tk.Frame | None = None
         self.update_button: Button | None = None
 
@@ -1952,37 +1956,112 @@ class InterviewSetup:
             messagebox.showinfo(APP_TITLE, "Finish the live room before installing the update.",
                                 parent=self.root)
             return
+        update = self.update
+        size_mb = (update.patch_size if update.has_patch else update.size) / 1048576
+        kind = "only the changed data" if update.has_patch else "the full installer"
         confirmed = messagebox.askyesno(
-            APP_TITLE, f"Install v{self.update.version} now?\n\nThe app downloads it and restarts.",
+            APP_TITLE,
+            f"Install v{update.version} now?\n\nDownload: {size_mb:.1f} MB ({kind}).\n"
+            "The app restarts itself when the update is ready.",
             parent=self.root)
         if not confirmed:
             return
         self.update_busy = True
-        show_toast(self.root, f"Downloading v{self.update.version}...", "info", 3000)
+        self._open_update_dialog()
         threading.Thread(target=self._download_update, name="copilot-update-download", daemon=True).start()
+
+    def _open_update_dialog(self) -> None:
+        """Small modal window with a live progress bar and byte counts."""
+        update = self.update
+        if update is None:
+            return
+        window = tk.Toplevel(self.root)
+        window.title(APP_TITLE)
+        window.configure(bg=ui.BG)
+        window.transient(self.root)
+        window.resizable(False, False)
+        window.protocol("WM_DELETE_WINDOW", lambda: None)
+        body = tk.Frame(window, bg=ui.BG, padx=S(24), pady=S(22))
+        body.pack(fill="both", expand=True)
+        label(body, f"Updating to v{update.version}", 14, ui.TEXT, "semibold").pack(anchor="w")
+        detail = label(body, "Preparing the download...", 11, ui.MUTED)
+        detail.pack(anchor="w", pady=(S(4), 0))
+        bar = Progress(body, height=6, bg=ui.BG)
+        bar.pack(fill="x", pady=(S(14), 0))
+        bar.configure(width=S(360))
+        count = label(body, "", 10, ui.MUTED)
+        count.pack(anchor="w", pady=(S(8), 0))
+        self.update_window = window
+        self.update_bar = bar
+        self.update_detail = detail
+        self.update_count = count
+        window.update_idletasks()
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - window.winfo_width()) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - window.winfo_height()) // 3)
+        window.geometry(f"+{x}+{y}")
+
+    def _update_progress(self, done: int, total: int) -> None:
+        bar = self.update_bar
+        if bar is None or not bar.winfo_exists():
+            return
+        fraction = (done / total) if total else 0.0
+        bar.set(min(1.0, fraction), animate=False)
+        if self.update_count is not None and self.update_count.winfo_exists():
+            done_mb = done / 1048576
+            if total:
+                self.update_count.configure(
+                    text=f"{done_mb:.1f} MB / {total / 1048576:.1f} MB  -  {int(fraction * 100)}%")
+            else:
+                self.update_count.configure(text=f"{done_mb:.1f} MB")
+
+    def _update_status(self, message: str) -> None:
+        if self.update_detail is not None and self.update_detail.winfo_exists():
+            self.update_detail.configure(text=message)
+
+    def _close_update_dialog(self) -> None:
+        window, self.update_window = self.update_window, None
+        self.update_bar = self.update_detail = self.update_count = None
+        if window is not None:
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+
+    def _update_failed(self, message: str) -> None:
+        self.update_busy = False
+        self._close_update_dialog()
+        show_toast(self.root, f"Update failed: {message[:120]}", "warn", 6000)
 
     def _download_update(self) -> None:
         update = self.update
         if update is None:
             return
         try:
-            path = download_update(update)
+            path = build_update(
+                update,
+                progress=lambda done, total: self._post(lambda: self._update_progress(done, total)),
+                status=lambda message: self._post(lambda: self._update_status(message)),
+            )
         except Exception as exc:  # noqa: BLE001 - surface any failure in the UI
             log.exception("Update download failed")
-            self.update_busy = False
-            self._post(lambda message=str(exc): show_toast(
-                self.root, f"Update failed: {message[:90]}", "warn", 5000))
+            message = str(exc)
+            self._post(lambda: self._update_failed(message))
             return
         self._post(lambda: self._finish_update(path))
 
     def _finish_update(self, path) -> None:
         self.update_busy = False
         if not apply_and_restart(path):
+            self._close_update_dialog()
             show_toast(self.root, "This build cannot update itself - grab the new EXE from the website.",
                        "warn", 5200)
             return
-        show_toast(self.root, "Restarting to finish the update...", "info", 2400)
-        self.root.after(800, self.shutdown)
+        self._update_status("Installing - the app restarts in a moment.")
+        if self.update_bar is not None and self.update_bar.winfo_exists():
+            self.update_bar.set(1.0, animate=False)
+        if self.update_count is not None and self.update_count.winfo_exists():
+            self.update_count.configure(text="Download complete")
+        self.root.after(900, self.shutdown)
 
     # ------------------------------------------------------------ shutdown
     def close_window(self):
