@@ -12,7 +12,7 @@ installed app updates itself from `releases/latest`.
 Latest build (always the newest release):
 
 ```
-https://github.com/siddharthdeshmukh25/Stealth-Co-Pilot-desktop/releases/latest/download/StealthInterviewCoPilot.exe
+https://github.com/siddharthdeshmukh25/Stealth-Co-Pilot/releases/latest/download/StealthInterviewCoPilot.exe
 ```
 
 ## How a release works
