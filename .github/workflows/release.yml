@@ -1,0 +1,56 @@
+name: Build Windows EXE
+
+# Push a vX.Y.Z tag (or run this workflow by hand) and the EXE lands on the
+# release page. Installed copies pick it up through the in-app updater.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, for example v1.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Build the EXE
+        run: >
+          python -m PyInstaller --clean --noconfirm --noconsole --onefile
+          --name StealthInterviewCoPilot --distpath dist --workpath build --specpath .
+          --icon assets/stealth_copilot.ico --version-file assets/version_info.txt
+          --add-data "assets/stealth_copilot.ico;assets"
+          --add-data "assets/stealth_copilot.png;assets"
+          --collect-all pyaudiowpatch --collect-all pystray --collect-all faster_whisper
+          --collect-all ctranslate2 --collect-all tokenizers --collect-all huggingface_hub
+          --collect-all av --exclude-module IPython --exclude-module matplotlib
+          --exclude-module pytest --exclude-module nbformat --exclude-module zmq
+          --exclude-module pandas --exclude-module scipy --exclude-module tensorflow
+          src/main.py
+
+      - name: Check the build
+        run: python -c "import os,sys; p='dist/StealthInterviewCoPilot.exe'; print(p, os.path.getsize(p)//1048576, 'MB'); sys.exit(0 if os.path.exists(p) else 1)"
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: Stealth Co-Pilot ${{ inputs.tag || github.ref_name }}
+          files: dist/StealthInterviewCoPilot.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true
