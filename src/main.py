@@ -10,6 +10,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import shutil
 from datetime import datetime
 import queue
 import socket
@@ -35,6 +36,7 @@ from local_stt import LocalTranscriber, local_stt_enabled
 from paths import resource_path
 from paths import app_data_dir
 from tray_icon import TrayController
+import updater
 from updater import Update, apply_and_restart, build_update, check as check_for_update
 from version import APP_VERSION
 from ws_client import AudioWebSocketClient
@@ -45,6 +47,18 @@ log = logging.getLogger(__name__)
 
 PRODUCTION_BACKEND_URL = "https://gtxqfihqhvihdm27ulovdm04.72.61.227.226.sslip.io"
 PRODUCTION_WEB_URL = "https://stealth-co-pilot.vercel.app"
+# Old public host from before the rename; it 404s, so any leftover env value or
+# saved link that still names it is rewritten instead of shown to the user.
+RETIRED_WEB_HOSTS = {"stealth-co-pilot-frontend.vercel.app"}
+
+
+def canonical_web_base(url: str) -> str:
+    """Map a retired web host onto the current one so QR/link never point at a dead page."""
+    host = url.split("://", 1)[-1].split("/", 1)[0].strip().lower()
+    if host in RETIRED_WEB_HOSTS:
+        log.info("Rewriting retired web host %s to %s", host, PRODUCTION_WEB_URL)
+        return PRODUCTION_WEB_URL
+    return url
 APP_TITLE = "Stealth Interview Co-Pilot"
 
 STEPS = (
@@ -177,7 +191,8 @@ class InterviewSetup:
         _apply_title_bar(root, ui.is_dark())
 
         self.backend_url = os.environ.get("COPILOT_BACKEND_URL", PRODUCTION_BACKEND_URL).rstrip("/")
-        self.web_base_override = os.environ.get("COPILOT_WEB_URL", PRODUCTION_WEB_URL).strip()
+        self.web_base_override = canonical_web_base(
+            os.environ.get("COPILOT_WEB_URL", PRODUCTION_WEB_URL).strip())
         self.lan_ip = local_ip_address()
         self.web_base = (self.web_base_override or f"http://{self.lan_ip}:3000").rstrip("/")
         self.server_mode_var = tk.StringVar(value="VPS Server")
@@ -239,6 +254,7 @@ class InterviewSetup:
         self.root.after(2500, self._check_updates_async)
         self._show_loading("Loading dashboard...")
         self.root.after(900, self._dismiss_loading)
+        self.root.after(1100, self._maybe_first_run_setup)
 
     # ---------------------------------------------------------------- theme
     @staticmethod
@@ -257,10 +273,83 @@ class InterviewSetup:
         return "dark" if value == "dark" else "light"
 
     def _save_theme(self, name: str) -> None:
-        try:
-            self._settings_path().write_text(json.dumps({"theme": name}), "utf-8")
-        except OSError:
-            log.debug("Could not persist the theme preference")
+        # Merge, not replace: ui.json also holds the update folder picked at setup.
+        updater.write_settings(theme=name)
+
+    # ------------------------------------------------------- first-run setup
+    def _maybe_first_run_setup(self) -> None:
+        """Ask once where updates are stored; later launches read ui.json."""
+        if str(updater.read_settings().get("update_dir") or "").strip():
+            return
+        log.info("First run: asking for the update folder")
+        self._open_setup_storage()
+
+    def _open_setup_storage(self) -> None:
+        """Intro step: choose the drive/folder that holds downloaded updates."""
+        window = tk.Toplevel(self.root)
+        window.title(APP_TITLE)
+        window.configure(bg=ui.BG)
+        window.transient(self.root)
+        window.resizable(False, False)
+        window.protocol("WM_DELETE_WINDOW", lambda: finish(silent=True))
+
+        body = tk.Frame(window, bg=ui.BG, padx=S(26), pady=S(24))
+        body.pack(fill="both", expand=True)
+        body.configure(width=S(470))
+        label(body, "Welcome to Stealth Co-Pilot", 15, ui.TEXT, "semibold").pack(anchor="w")
+        label(body, "Step 1 · Choose where updates are kept", 11, ui.MUTED).pack(anchor="w", pady=(S(3), 0))
+        label(body,
+              "The app downloads each new version here, swaps itself and reopens on the "
+              "new build. Pick a drive with at least 1.5 GB free, and keep this folder.",
+              11, ui.MUTED, wraplength=S(410), justify="left").pack(anchor="w", pady=(S(12), 0))
+
+        chosen = tk.StringVar(value=str(updater.update_dir()))
+        path_box = tk.Frame(body, bg=ui.PANEL, padx=S(12), pady=S(10))
+        path_box.pack(fill="x", pady=(S(14), 0))
+        path_label = label(path_box, "", 10, ui.TEXT)
+        path_label.pack(anchor="w")
+        free_label = label(path_box, "", 10, ui.MUTED)
+        free_label.pack(anchor="w", pady=(S(3), 0))
+
+        def free_text(path: str) -> str:
+            try:
+                free = shutil.disk_usage(path).free / (1024 ** 3)
+            except OSError:
+                return "This drive is not available right now"
+            return f"{free:.1f} GB free on this drive"
+
+        def refresh() -> None:
+            path_label.configure(text=chosen.get())
+            free_label.configure(text=free_text(chosen.get()))
+
+        def pick() -> None:
+            folder = filedialog.askdirectory(parent=window, title="Choose the update folder",
+                                             initialdir=chosen.get() or str(app_data_dir()))
+            if folder:
+                chosen.set(folder)
+                refresh()
+
+        def finish(silent: bool = False) -> None:
+            updater.write_settings(update_dir=chosen.get())
+            log.info("Update folder set to %s", chosen.get())
+            if window.winfo_exists():
+                window.destroy()
+            if not silent:
+                show_toast(self.root, "Update folder saved", "success", 2600)
+
+        row = tk.Frame(body, bg=ui.BG)
+        row.pack(fill="x", pady=(S(16), 0))
+        Button(row, text="Choose folder", command=pick, variant="secondary", height=40,
+               size=12).pack(side="left")
+        Button(row, text="Continue", command=finish, variant="primary", height=40,
+               size=12).pack(side="right")
+
+        refresh()
+        window.update_idletasks()
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - window.winfo_width()) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - window.winfo_height()) // 3)
+        window.geometry(f"+{x}+{y}")
+        window.grab_set()
 
     def _toggle_theme(self) -> None:
         self._switch_theme("light" if ui.is_dark() else "dark")
@@ -578,7 +667,8 @@ class InterviewSetup:
 
         if selected == "VPS Server":
             self.backend_url = os.environ.get("COPILOT_BACKEND_URL", "").strip().rstrip("/") or PRODUCTION_BACKEND_URL
-            self.web_base_override = os.environ.get("COPILOT_WEB_URL", "").strip() or PRODUCTION_WEB_URL
+            self.web_base_override = canonical_web_base(
+                os.environ.get("COPILOT_WEB_URL", "").strip() or PRODUCTION_WEB_URL)
             self.web_base = self.web_base_override.rstrip("/")
             self.server_pill.set("Ready", ui.ACCENT, pulsing=False)
         else:

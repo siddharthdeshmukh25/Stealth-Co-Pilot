@@ -11,6 +11,7 @@ batch script that waits for the app to exit, replaces the EXE and starts it.
 """
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from typing import Callable
 import bsdiff4
 import requests
 
+from paths import app_data_dir
 from version import APP_VERSION, GITHUB_REPO
 
 log = logging.getLogger(__name__)
@@ -141,9 +143,45 @@ def _stream(url: str, target: Path, expected: int, progress: Progress | None) ->
     return done
 
 
+def settings_path() -> Path:
+    return app_data_dir() / "ui.json"
+
+
+def read_settings() -> dict:
+    """Shared ui.json (theme, update folder); a broken file must never block startup."""
+    try:
+        data = json.loads(settings_path().read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_settings(**changes) -> dict:
+    """Merge keys into ui.json instead of replacing it, so one feature cannot wipe another."""
+    data = read_settings()
+    data.update(changes)
+    try:
+        settings_path().write_text(json.dumps(data), "utf-8")
+    except OSError:
+        log.debug("Could not persist the app settings")
+    return data
+
+
+def update_dir() -> Path:
+    """Folder the chosen at setup time; patches, the staged EXE and the swap script live here."""
+    raw = str(read_settings().get("update_dir") or "").strip()
+    folder = Path(raw) if raw else app_data_dir() / "updates"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+    except OSError:
+        log.warning("Update folder %s is not writable; falling back to the temp folder", folder)
+        return Path(tempfile.gettempdir())
+
+
 def download(update: Update, progress: Progress | None = None) -> Path:
-    """Fetch the whole release EXE into the temp folder."""
-    target = Path(tempfile.gettempdir()) / f"StealthInterviewCoPilot-{update.version}.exe"
+    """Fetch the whole release EXE into the update folder."""
+    target = update_dir() / f"StealthInterviewCoPilot-{update.version}.exe"
     _stream(update.url, target, update.size, progress)
     return target
 
@@ -159,11 +197,11 @@ def build_update(update: Update, progress: Progress | None = None,
     if update.has_patch and is_frozen():
         if status is not None:
             status(f"Downloading the {update.patch_size / 1048576:.1f} MB update")
-        patch_file = Path(tempfile.gettempdir()) / f"copilot-{update.version}.bsdiff"
+        patch_file = update_dir() / f"copilot-{update.version}.bsdiff"
         _stream(update.patch_url, patch_file, update.patch_size, progress)
         if status is not None:
             status("Applying the update")
-        target = Path(tempfile.gettempdir()) / f"StealthInterviewCoPilot-{update.version}.exe"
+        target = update_dir() / f"StealthInterviewCoPilot-{update.version}.exe"
         current = Path(sys.executable).resolve().read_bytes()
         rebuilt = bsdiff4.patch(current, patch_file.read_bytes())
         target.write_bytes(rebuilt)
@@ -191,7 +229,7 @@ def apply_and_restart(new_file: Path) -> bool:
         log.warning("Downloaded update is missing: %s", staging)
         return False
 
-    script = Path(tempfile.gettempdir()) / "stealth-copilot-update.bat"
+    script = update_dir() / "stealth-copilot-update.bat"
     # Join with "\n" and let write_text add CRLF: pre-joining with "\r\n" mixed with
     # the text-mode translation produced "\r\r\n", which left a stray CR on every
     # line and made the whole script silently fail to replace the EXE.
