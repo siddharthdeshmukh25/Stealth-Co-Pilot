@@ -233,37 +233,59 @@ def apply_and_restart(new_file: Path) -> bool:
     # Join with "\n" and let write_text add CRLF: pre-joining with "\r\n" mixed with
     # the text-mode translation produced "\r\r\n", which left a stray CR on every
     # line and made the whole script silently fail to replace the EXE.
+    #
+    # Success is judged by the staged file disappearing, never by %APP% existing:
+    # the old check was true even when the first move had failed because the EXE was
+    # still locked, so the script "finished" without swapping anything and simply
+    # relaunched the old version.
     script.write_text(
         "\n".join([
             "@echo off",
-            "setlocal EnableExtensions",
+            "setlocal EnableExtensions DisableDelayedExpansion",
             f'set "APP={exe}"',
             f'set "NEW={staging}"',
+            f'set "APPDIR={exe.parent}"',
             'set "LOG=%LOCALAPPDATA%\\StealthInterviewCoPilot\\logs\\update.log"',
             'echo [%DATE% %TIME%] waiting for the app to close >> "%LOG%"',
+            "set /a WAIT=0",
             ":wait",
             f'tasklist /fi "imagename eq {exe.name}" 2>nul | find /i "{exe.name}" >nul',
-            "if not errorlevel 1 (",
-            "  ping -n 2 127.0.0.1 >nul",
-            "  goto wait",
-            ")",
+            "if errorlevel 1 goto closed",
+            "set /a WAIT+=1",
+            "if %WAIT% gtr 90 goto stillrunning",
+            "ping -n 2 127.0.0.1 >nul",
+            "goto wait",
+            ":stillrunning",
+            'echo [%DATE% %TIME%] app never exited, giving up >> "%LOG%"',
+            "goto end",
+            ":closed",
             'echo [%DATE% %TIME%] closed, swapping >> "%LOG%"',
             "set /a TRIES=0",
             ":swap",
             "set /a TRIES+=1",
             'if exist "%APP%.old" del /f /q "%APP%.old" >nul 2>&1',
+            'if not exist "%NEW%" goto nosource',
             'move /y "%APP%" "%APP%.old" >nul 2>&1',
             'move /y "%NEW%" "%APP%" >nul 2>&1',
-            'if exist "%APP%" goto :startapp',
-            "if %TRIES% lss 10 (",
+            'if exist "%NEW%" goto retry',
+            'if not exist "%APP%" goto retry',
+            "goto startapp",
+            ":retry",
+            "if %TRIES% lss 15 (",
             "  ping -n 2 127.0.0.1 >nul",
             "  goto swap",
             ")",
-            'echo [%DATE% %TIME%] swap failed >> "%LOG%"',
-            "goto :end",
+            'echo [%DATE% %TIME%] swap failed after %TRIES% tries >> "%LOG%"',
+            'if not exist "%APP%" if exist "%APP%.old" move /y "%APP%.old" "%APP%" >nul 2>&1',
+            "goto end",
+            ":nosource",
+            'echo [%DATE% %TIME%] staged update missing: %NEW% >> "%LOG%"',
+            "goto end",
             ":startapp",
             'echo [%DATE% %TIME%] swapped, starting the new build >> "%LOG%"',
-            'start "" "%APP%"',
+            'start "" /d "%APPDIR%" "%APP%"',
+            "ping -n 4 127.0.0.1 >nul",
+            'del /f /q "%APP%.old" >nul 2>&1',
             ":end",
             'del /f /q "%~f0" >nul 2>&1',
             "",
@@ -272,12 +294,14 @@ def apply_and_restart(new_file: Path) -> bool:
         newline="\r\n",
     )
 
-    flags = 0
-    if hasattr(subprocess, "DETACHED_PROCESS"):
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    # CREATE_NO_WINDOW: DETACHED_PROCESS still let cmd.exe put a console on screen,
+    # which is the pair of black terminal windows users saw next to the update.
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     try:
         subprocess.Popen(["cmd", "/c", str(script)], creationflags=flags, close_fds=True,
-                         cwd=str(exe.parent))
+                         cwd=str(exe.parent), stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError:
         log.exception("Could not start the update script")
         return False

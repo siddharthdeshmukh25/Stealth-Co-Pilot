@@ -61,7 +61,10 @@ Source: "..\assets\stealth_copilot.ico"; DestDir: "{app}\assets"; Flags: ignorev
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Tasks: desktopicon
+; {userdesktop} follows a OneDrive-redirected desktop; the public {autodesktop}
+; folder is invisible to people whose Desktop lives in OneDrive, which is why the
+; shortcut looked missing after install.
+Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExe}"; Tasks: desktopicon
 Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Tasks: quicklaunchicon
 
 [Run]
@@ -70,6 +73,15 @@ Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait pos
 [UninstallDelete]
 ; The wizard's own leftovers only; %LOCALAPPDATA%\StealthInterviewCoPilot stays.
 Type: filesandordirs; Name: "{app}\assets"
+
+[Code]
+// Report where the shortcuts went, so "the desktop icon is missing" is answerable
+// from the install log instead of guessing.
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    Log('Desktop folder: ' + ExpandConstant('{userdesktop}'));
+end;
 
 [Messages]
 WelcomeLabel2=This will install [name/ver] on your computer.%n%nThe app keeps its updates, interview history and speech model in your own user folder, and it updates itself in place.%n%nIt is recommended that you close all other applications before continuing.

@@ -2151,7 +2151,25 @@ class InterviewSetup:
             self.update_bar.set(1.0, animate=False)
         if self.update_count is not None and self.update_count.winfo_exists():
             self.update_count.configure(text="Download complete")
-        self.root.after(900, self.shutdown)
+        self.root.after(600, self._quit_for_update)
+
+    def _quit_for_update(self) -> None:
+        """Exit hard so the swap script can replace the EXE straight away.
+
+        A normal shutdown stops the local services first; when that block stalled the
+        window stayed open, the update script kept waiting for the process and the
+        user was left on the old version. Nothing here needs a graceful teardown.
+        """
+        self._closing = True
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+        try:
+            logging.shutdown()
+        except Exception:  # noqa: BLE001 - exiting must never be blocked
+            pass
+        os._exit(0)
 
     # ------------------------------------------------------------ shutdown
     def close_window(self):
