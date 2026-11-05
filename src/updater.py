@@ -192,25 +192,46 @@ def apply_and_restart(new_file: Path) -> bool:
         return False
 
     script = Path(tempfile.gettempdir()) / "stealth-copilot-update.bat"
+    # Join with "\n" and let write_text add CRLF: pre-joining with "\r\n" mixed with
+    # the text-mode translation produced "\r\r\n", which left a stray CR on every
+    # line and made the whole script silently fail to replace the EXE.
     script.write_text(
-        "\r\n".join([
+        "\n".join([
             "@echo off",
+            "setlocal EnableExtensions",
             f'set "APP={exe}"',
             f'set "NEW={staging}"',
+            'set "LOG=%LOCALAPPDATA%\\StealthInterviewCoPilot\\logs\\update.log"',
+            'echo [%DATE% %TIME%] waiting for the app to close >> "%LOG%"',
             ":wait",
             f'tasklist /fi "imagename eq {exe.name}" 2>nul | find /i "{exe.name}" >nul',
             "if not errorlevel 1 (",
-            "  timeout /t 1 /nobreak >nul",
+            "  ping -n 2 127.0.0.1 >nul",
             "  goto wait",
             ")",
+            'echo [%DATE% %TIME%] closed, swapping >> "%LOG%"',
+            "set /a TRIES=0",
+            ":swap",
+            "set /a TRIES+=1",
             'if exist "%APP%.old" del /f /q "%APP%.old" >nul 2>&1',
             'move /y "%APP%" "%APP%.old" >nul 2>&1',
             'move /y "%NEW%" "%APP%" >nul 2>&1',
-            'if exist "%APP%" start "" "%APP%"',
+            'if exist "%APP%" goto :startapp',
+            "if %TRIES% lss 10 (",
+            "  ping -n 2 127.0.0.1 >nul",
+            "  goto swap",
+            ")",
+            'echo [%DATE% %TIME%] swap failed >> "%LOG%"',
+            "goto :end",
+            ":startapp",
+            'echo [%DATE% %TIME%] swapped, starting the new build >> "%LOG%"',
+            'start "" "%APP%"',
+            ":end",
             'del /f /q "%~f0" >nul 2>&1',
             "",
         ]),
         encoding="utf-8",
+        newline="\r\n",
     )
 
     flags = 0
