@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -20,7 +21,16 @@ import bsdiff4
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "siddharthdeshmukh25/Stealth-Co-Pilot")
 ASSET = "StealthInterviewCoPilot.exe"
+# Releases carry both "...exe" and "...-v1.2.3.exe"; either one is fine to diff against.
+ASSET_PATTERN = re.compile(r"^StealthInterviewCoPilot(-v[\d.]+)?\.exe$", re.IGNORECASE)
 DIST = Path("dist")
+
+
+def exe_asset(release: dict) -> dict | None:
+    for asset in release.get("assets") or []:
+        if ASSET_PATTERN.match(str(asset.get("name") or "")):
+            return asset
+    return None
 
 
 def api(path: str) -> object:
@@ -53,7 +63,7 @@ def main() -> int:
     for release in releases if isinstance(releases, list) else []:
         if str(release.get("tag_name", "")).lstrip("vV") == new_version:
             continue
-        if any(str(asset.get("name")) == ASSET for asset in release.get("assets") or []):
+        if exe_asset(release) is not None:
             previous = release
             break
     if previous is None:
@@ -61,7 +71,10 @@ def main() -> int:
         return 0
 
     old_version = str(previous["tag_name"]).lstrip("vV")
-    asset = next(item for item in previous["assets"] if str(item.get("name")) == ASSET)
+    asset = exe_asset(previous)
+    if asset is None:
+        print("The earlier release has no EXE asset; skipping the delta patch")
+        return 0
     old_exe = DIST / f"previous-{old_version}.exe"
     print(f"Downloading v{old_version} to diff against v{new_version}...")
     urllib.request.urlretrieve(str(asset["browser_download_url"]), old_exe)

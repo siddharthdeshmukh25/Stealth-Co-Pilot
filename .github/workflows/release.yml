@@ -46,6 +46,14 @@ jobs:
       - name: Check the build
         run: python -c "import os,sys; p='dist/StealthInterviewCoPilot.exe'; print(p, os.path.getsize(p)//1048576, 'MB'); sys.exit(0 if os.path.exists(p) else 1)"
 
+      # The file a visitor downloads should say which build it is. The plain name is
+      # uploaded too so builds released before the versioned name keep updating.
+      - name: Name the installer with its version
+        run: |
+          $tag = "${{ inputs.tag || github.ref_name }}"
+          Copy-Item "dist/StealthInterviewCoPilot.exe" "dist/StealthInterviewCoPilot-$tag.exe"
+          Get-ChildItem "dist/*.exe" | Select-Object Name, Length
+
       # Only the changed bytes: the app patches itself instead of re-downloading 108 MB.
       - name: Build the delta patch
         env:
@@ -60,6 +68,7 @@ jobs:
           name: Stealth Co-Pilot ${{ inputs.tag || github.ref_name }}
           files: |
             dist/StealthInterviewCoPilot.exe
+            dist/StealthInterviewCoPilot-v*.exe
             dist/*.bsdiff
           generate_release_notes: true
           fail_on_unmatched_files: false

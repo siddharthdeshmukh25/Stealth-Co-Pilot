@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 
 RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 ASSET_NAME = "StealthInterviewCoPilot.exe"
+VERSIONED_ASSET = "StealthInterviewCoPilot-v{version}.exe"
 PATCH_TEMPLATE = "StealthInterviewCoPilot-v{old}-to-v{new}.bsdiff"
 TIMEOUT = 20
 CHUNK = 1 << 18
@@ -67,6 +68,18 @@ def is_newer(candidate: str, current: str = APP_VERSION) -> bool:
     return version_key(candidate) > version_key(current)
 
 
+def _installer_asset(assets: list, version: str) -> dict | None:
+    """Prefer the versioned installer so the saved file says which build it is."""
+    wanted = VERSIONED_ASSET.format(version=version).lower()
+    for item in assets:
+        if str(item.get("name") or "").lower() == wanted:
+            return item
+    for item in assets:
+        if str(item.get("name") or "").lower() == ASSET_NAME.lower():
+            return item
+    return None
+
+
 def check() -> Update | None:
     """Return the newest published release when it beats the running build."""
     try:
@@ -89,8 +102,7 @@ def check() -> Update | None:
         return None
     new_version = tag.lstrip("vV")
     assets = data.get("assets") or []
-    full = next((item for item in assets
-                 if str(item.get("name") or "").lower() == ASSET_NAME.lower()), None)
+    full = _installer_asset(assets, new_version)
     if full is None:
         log.info("Release %s has no %s asset", tag, ASSET_NAME)
         return None
