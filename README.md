@@ -17,14 +17,12 @@ https://github.com/siddharthdeshmukh25/Stealth-Co-Pilot/releases/latest/download
 
 ## How a release works
 
-1. Bump `APP_VERSION` in `src/version.py` (and `FileVersion` in `assets/version_info.txt`).
-2. Push the change and a matching tag:
-   ```bat
-   git tag v1.1.0
-   git push origin main --tags
-   ```
-3. The `Build Windows EXE` workflow builds the EXE and publishes the release.
-4. Anyone running an older build sees **Update vX.Y.Z** in the top bar on the next
+1. Double-click `release.bat`. It bumps the patch version in `src/version.py` and
+   `assets/version_info.txt`, syncs this folder into the public repo, pushes
+   `main` and pushes the matching `vX.Y.Z` tag. Add `--keep-version` to publish
+   the version that is already set (for example after editing it to `1.2.0`).
+2. The `Build Windows EXE` workflow builds the EXE and publishes the release.
+3. Anyone running an older build sees **Update vX.Y.Z** in the top bar on the next
    launch; one click downloads the new EXE and restarts the app.
 
 `src/updater.py` does the checking, downloading and the on-exit EXE swap, so no

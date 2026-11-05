@@ -38,7 +38,7 @@ from tray_icon import TrayController
 from updater import Update, apply_and_restart, check as check_for_update, download as download_update
 from version import APP_VERSION
 from ws_client import AudioWebSocketClient
-from ui_kit import (Button, Card, Entry, LoadingOverlay, Meter, NavItem, Pill, Progress, Segmented,
+from ui_kit import (Button, Card, Entry, LoadingOverlay, Meter, NavItem, Pill, Progress,
                     TextArea, S, label, show_toast)
 
 log = logging.getLogger(__name__)
@@ -369,14 +369,6 @@ class InterviewSetup:
         self.theme_button.pack(side="right")
         self.navbar_right = right
         self._mount_update_button()
-        self.server_mode_label = Segmented(
-            right,
-            options=("VPS Server", "Network Server"),
-            value=self.server_mode_var.get(),
-            command=self._server_mode_selected,
-            height=28, size=11,
-        )
-        self.server_mode_label.pack(side="right", padx=(0, S(8)))
         self.server_pill = Pill(right, "Ready", ui.ACCENT_TEXT, height=24, size=10)
         self.server_pill.pack(side="right", padx=(0, S(8)))
 
@@ -568,16 +560,6 @@ class InterviewSetup:
         self.root.bind("<Control-l>", lambda _e: self.copy_link())
         self.root.bind("<Control-p>", lambda _e: self.toggle_capture())
         self.root.bind("<Control-o>", lambda _e: self.open_mobile_link())
-
-    def _server_mode_selected(self, value: str):
-        """Segmented switch handler: mirror the choice and restart local services."""
-        if self.session_id:
-            # A live room is bound to the server it was created on.
-            self.server_mode_label.set(self.server_mode_var.get())
-            show_toast(self.root, "End the current room before switching servers.", "warn")
-            return
-        self.server_mode_var.set(value)
-        self._apply_server_mode()
 
     def _apply_server_mode(self, initial=False):
         """Switch the app between the local LAN server and the production VPS."""
@@ -1242,8 +1224,6 @@ class InterviewSetup:
         self.mobile_url = f"{self.web_base}/teleprompter/{quote(self.session_id)}"
         self.step = 4
         self.max_step = 4
-        self.server_mode_label.set(self.server_mode_var.get())
-        self.server_mode_label.configure(cursor="arrow")
         self._render_step(animate=False)
         self._save_session_state()
         self.progress.set(1.0)
@@ -1295,7 +1275,6 @@ class InterviewSetup:
         self.extraction_warning = ""
         self.step = 1
         self.max_step = 1
-        self.server_mode_label.configure(cursor="hand2")
         self._render_step(animate=False)
 
     def _request_interview_end(self, session_id: str, code: str):
@@ -1393,11 +1372,6 @@ class InterviewSetup:
         self.mobile_url = f"{self.web_base}/teleprompter/{quote(self.session_id)}"
         elapsed = float(saved.get("elapsed") or 0)
         self.started_at = time.monotonic() - elapsed if elapsed else time.monotonic()
-        mode = str(saved.get("server_mode") or "")
-        if mode in {"VPS Server", "Network Server"}:
-            self.server_mode_var.set(mode)
-            self.server_mode_label.set(mode)
-        self.server_mode_label.configure(cursor="arrow")
         self.step, self.max_step = 4, 4
         self._render_step(animate=False)
         self._set_live_status("Rejoined your live interview · waiting for the next caption.", ui.ACCENT_TEXT)
